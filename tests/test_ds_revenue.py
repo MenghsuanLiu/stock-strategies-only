@@ -25,3 +25,17 @@ def test_revenue_mom_yoy_columns(monkeypatch):
     monkeypatch.setattr(ds, "fetch_finmind_cached", lambda *a, **k: _raw())
     out = ds.get_month_revenue("2330", "2024-01-01")
     assert {"avail_date", "mom", "yoy", "revenue"}.issubset(out.columns)
+
+
+def test_revenue_yoy_aligns_by_period(monkeypatch):
+    """YoY 對齊去年同月，月份有缺口也不錯位（review issue #7）。"""
+    raw = pd.DataFrame({
+        "date": pd.to_datetime(["2023-01-01", "2023-02-01", "2024-01-01"]),
+        "revenue_year": [2023, 2023, 2024],
+        "revenue_month": [1, 2, 1],
+        "revenue": [100, 200, 150],
+    })
+    monkeypatch.setattr(ds, "fetch_finmind_cached", lambda *a, **k: raw.copy())
+    out = ds.get_month_revenue("2330", "2023-01-01")
+    row = out[(out["revenue_year"] == 2024) & (out["revenue_month"] == 1)].iloc[0]
+    assert abs(row["yoy"] - 0.5) < 1e-9   # 2024-01 對 2023-01：150/100-1，非對位置上一筆 200

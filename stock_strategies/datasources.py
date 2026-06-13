@@ -78,7 +78,16 @@ def get_month_revenue(stock_id: str, start: str, as_of: str | None = None) -> pd
     df["avail_date"] = df["period"] + pd.offsets.MonthEnd(0) + pd.Timedelta(days=10)
     df = df.sort_values("period").reset_index(drop=True)
     df["mom"] = df["revenue"].pct_change()
-    df["yoy"] = df["revenue"].pct_change(periods=12)
+    # YoY 以「去年同月」對齊（用 period 映射），避免月份缺口時 pct_change(12) 位置偏移算錯
+    rev_by_period = dict(zip(df["period"], df["revenue"]))
+
+    def _yoy(row):
+        base = rev_by_period.get(row["period"] - pd.DateOffset(years=1))
+        if base and pd.notna(base) and pd.notna(row["revenue"]):
+            return row["revenue"] / base - 1
+        return float("nan")
+
+    df["yoy"] = df.apply(_yoy, axis=1)
     if as_of:
         df = df[df["avail_date"] <= pd.to_datetime(as_of)]
     return df[["avail_date", "period", "revenue_year", "revenue_month",

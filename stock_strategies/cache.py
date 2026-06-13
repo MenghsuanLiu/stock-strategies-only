@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,7 +30,6 @@ class FinMindRateLimitError(RuntimeError):
 
 def _cache_dir() -> Path:
     # 每次讀 env：測試會用 monkeypatch 改 FINMIND_CACHE_DIR
-    import os
     return Path(os.environ.get("FINMIND_CACHE_DIR", FINMIND_CACHE_DIR))
 
 
@@ -98,7 +98,7 @@ def _rate_limited_get(params: dict, timeout: int, max_retries: int) -> dict:
         _throttle()
         resp = requests.get(FINMIND_URL, params=params, timeout=timeout)
         if _is_rate_limited(resp):
-            if attempt >= RATE_LIMIT_MAX_RETRIES:
+            if attempt >= max_retries:
                 raise FinMindRateLimitError(
                     f"FinMind 限流重試 {attempt} 次仍失敗: {params.get('dataset')}"
                 )
@@ -178,7 +178,7 @@ def fetch_finmind_cached(
     fresh_days: int | None = None,
     force_refresh: bool = False,
     timeout: int = 30,
-    max_retries: int = 2,
+    max_retries: int = RATE_LIMIT_MAX_RETRIES,
 ) -> pd.DataFrame:
     """帶 parquet 快取 + 限流退避的 FinMind 取數。
 
@@ -197,12 +197,13 @@ def fetch_finmind_cached(
             "dataset": dataset,
             "data_id": data_id,
             "start_date": start_date,
-            "token": __import__("os").environ.get("FINMIND_TOKEN", ""),
+            "token": os.environ.get("FINMIND_TOKEN", ""),
         }
-        # 增量：有舊快取則只抓 max_date 之後（留 7 天 overlap 去重）
+        # 增量：有舊快取（已含早期全歷史）則只抓 max_date-7d 之後，concat 去重補上新資料。
+        # 不可用 min(start_date, inc_start)：當 start_date 早於 cache 時會退回全量重抓，增量失效。
         if cached is not None and len(cached) and "date" in cached.columns:
             inc_start = (cached["date"].max() - pd.Timedelta(days=7)).strftime("%Y-%m-%d")
-            params["start_date"] = min(start_date, inc_start)
+            params["start_date"] = inc_start
         payload = _rate_limited_get(params, timeout=timeout, max_retries=max_retries)
         fresh = _api_to_df(payload)
         if cached is not None and len(cached):

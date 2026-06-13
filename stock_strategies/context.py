@@ -6,6 +6,7 @@ price_df 進 ctx 時尚未 add_indicators，由消費端統一呼叫一次。
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 
 import pandas as pd
@@ -41,12 +42,14 @@ class FactorContext:
             df = df[df["date"] <= self.as_of]
         return df.iloc[-1] if len(df) else None
 
-    def asof_row(self, df_name: str) -> pd.Series | None:
-        """對不規則頻率資料取 date<=as_of 的最後一筆。"""
+    def asof_row(self, df_name: str, date_col: str = "date") -> pd.Series | None:
+        """對不規則頻率資料取 <=as_of 的最後一筆。
+        注意：revenue 的時間欄是 avail_date（非 date），須以
+        asof_row("revenue", "avail_date") 取用，否則回 None。"""
         df = getattr(self, df_name, None)
-        if df is None or df.empty or "date" not in df.columns:
+        if df is None or df.empty or date_col not in df.columns:
             return None
-        sub = df[df["date"] <= self.as_of]
+        sub = df[df[date_col] <= self.as_of]
         return sub.iloc[-1] if len(sub) else None
 
 
@@ -95,14 +98,23 @@ def build_context_from_bundle(
         if df is None or df.empty:
             meta["missing"].append(name)
 
+    # market_cap 一律以 as_of 切片後的最後收盤動態重算（股本/10 × 收盤），
+    # 不用 bundle 內預存的市值——否則回測逐日切同一 bundle 時會用到最新市值（look-ahead）。
+    shares = capital.get("shares_outstanding")
+    market_cap = None
+    if shares and price_df is not None and len(price_df) and "close" in price_df.columns:
+        closes = pd.to_numeric(price_df["close"], errors="coerce").dropna()
+        if len(closes):
+            market_cap = shares / 10 * float(closes.iloc[-1])
+
     return FactorContext(
         stock_id=stock_id, as_of=as_of,
         price_df=price_df if price_df is not None else pd.DataFrame(),
         index_df=index_df, inst=inst, revenue=revenue, valuation=valuation,
         margin=margin, shareholding=shareholding, fundamentals=fundamentals,
         industry=capital.get("industry"),
-        shares_outstanding=capital.get("shares_outstanding"),
-        market_cap=capital.get("market_cap"),
+        shares_outstanding=shares,
+        market_cap=market_cap,
         meta=meta,
     )
 
@@ -138,8 +150,10 @@ def _get_fundamentals_raw(stock_id: str) -> dict:
             "roe": {int(y): round(float(v), 2) for y, v in roe.items()}}
 
 
-def _gather_raw_bundle(stock_id: str, start: str, lookback_years: int) -> dict:
-    """一次抓全期資料（回測前置）。不切 as_of；切片交給 from_bundle。"""
+def _gather_raw_bundle(stock_id: str, start: str, lookback_years: int,
+                       as_of: str | None = None) -> dict:
+    """一次抓全期資料（回測前置）。時間序列不切 as_of（逐日切交給 from_bundle）；
+    僅 capital(股本/產業) 以 as_of 取點，避免市值/股本用到未來資訊（look-ahead）。"""
     return {
         "price": get_price_history_cached(stock_id, start),
         "index": ds.get_index_history("TAIEX", start),
@@ -149,7 +163,7 @@ def _gather_raw_bundle(stock_id: str, start: str, lookback_years: int) -> dict:
         "margin": ds.get_margin(stock_id, start),
         "shareholding": ds.get_shareholding(stock_id, start),
         "fundamentals_raw": _get_fundamentals_raw(stock_id),
-        "capital": ds.get_capital_and_industry(stock_id),
+        "capital": ds.get_capital_and_industry(stock_id, as_of=as_of),
     }
 
 
@@ -166,10 +180,13 @@ def build_context(
     as_of = pd.Timestamp(as_of_date)
     start = (as_of - pd.DateOffset(years=lookback_years) - pd.Timedelta(days=60)).strftime("%Y-%m-%d")
     try:
-        bundle = _gather_raw_bundle(stock_id, start, lookback_years)
+        bundle = _gather_raw_bundle(stock_id, start, lookback_years, as_of=as_of_date)
     except Exception:
         if strict:
             raise
+        logging.getLogger(__name__).warning(
+            "build_context(%s, %s) 抓取失敗，改回空 bundle", stock_id, as_of_date, exc_info=True
+        )
         bundle = {"price": pd.DataFrame(), "index": pd.DataFrame(), "inst": pd.DataFrame(),
                   "revenue": pd.DataFrame(), "valuation": pd.DataFrame(), "margin": pd.DataFrame(),
                   "shareholding": pd.DataFrame(), "fundamentals_raw": {"eps": {}, "roe": {}},

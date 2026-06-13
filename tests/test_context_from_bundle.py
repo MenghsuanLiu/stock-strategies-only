@@ -41,3 +41,26 @@ def test_price_sliced_to_asof():
     b = _bundle()
     ctx = build_context_from_bundle("2330", pd.Timestamp("2022-02-01"), b)
     assert ctx.price_df["date"].max() <= pd.Timestamp("2022-02-01")
+
+
+def test_market_cap_recomputed_from_asof_close():
+    """market_cap 應以 as_of 切片後最後收盤重算，不可用最新收盤或 bundle 預存值（review issue #3）。"""
+    import pandas as pd
+    from stock_strategies.context import build_context_from_bundle
+    dates = pd.bdate_range("2022-01-03", periods=400)
+    price = pd.DataFrame({
+        "date": dates, "open": 1.0, "high": 1.0, "low": 1.0,
+        "close": [100.0 + i for i in range(len(dates))], "volume": 1000,
+    })
+    bundle = {
+        "price": price, "index": pd.DataFrame(), "inst": pd.DataFrame(),
+        "revenue": pd.DataFrame(), "valuation": pd.DataFrame(), "margin": pd.DataFrame(),
+        "shareholding": pd.DataFrame(), "fundamentals_raw": {"eps": {}, "roe": {}},
+        "capital": {"industry": "X", "shares_outstanding": 1000.0, "market_cap": 999999.0},
+    }
+    as_of = pd.Timestamp("2022-02-01")
+    ctx = build_context_from_bundle("2330", as_of, bundle)
+    asof_close = float(price[price["date"] <= as_of]["close"].iloc[-1])
+    assert ctx.market_cap == 1000.0 / 10 * asof_close
+    assert ctx.market_cap != 999999.0                              # 不用 bundle 預存值
+    assert ctx.market_cap != 1000.0 / 10 * float(price["close"].iloc[-1])  # 不用最新收盤

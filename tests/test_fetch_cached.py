@@ -52,3 +52,20 @@ def test_force_refresh_rehits_api(monkeypatch):
     cache.fetch_finmind_cached("TaiwanStockPrice", "2330", "2024-01-01")
     cache.fetch_finmind_cached("TaiwanStockPrice", "2330", "2024-01-01", force_refresh=True)
     assert state["n"] == 2
+
+
+def test_incremental_only_fetches_after_max_date(monkeypatch):
+    """過期快取應只增量抓 max_date-7d 之後，不可退回全量重抓（review issue #2）。"""
+    captured = {}
+
+    def fake(params, timeout, max_retries):
+        captured["start_date"] = params["start_date"]
+        return {"status": 200, "data": [{"date": "2020-01-09", "close": 11}]}
+
+    monkeypatch.setattr(cache, "_rate_limited_get", fake)
+    # 預先寫一個「過期」快取：max_date = 2020-01-02（距今已過 fresh_days）
+    old = pd.DataFrame({"date": pd.to_datetime(["2020-01-02"]), "close": [10]})
+    cache._write_cache("TaiwanStockPrice", "2330", old)
+    cache.fetch_finmind_cached("TaiwanStockPrice", "2330", "2015-01-01")
+    # 增量起點應為 max_date(2020-01-02) - 7d = 2019-12-26，而非請求的 2015-01-01
+    assert captured["start_date"] == "2019-12-26"
