@@ -205,3 +205,27 @@ def get_capital_and_industry(stock_id: str, as_of: str | None = None) -> dict:
             if len(close):
                 out["market_cap"] = shares / 10 * float(close.iloc[-1])
     return out
+
+
+_INDEX_FALLBACK = {"TAIEX": ["TAIEX", "TWII"], "TWII": ["TWII", "TAIEX"]}
+
+
+def get_index_history(index_id: str = "TAIEX", start: str | None = None,
+                      as_of: str | None = None) -> pd.DataFrame:
+    """大盤指數（日）。回 date, open, high, low, close。
+    依序試 TAIEX/TWII（沿用 market.py 慣例）。"""
+    start = start or "2015-01-01"
+    for did in _INDEX_FALLBACK.get(index_id, [index_id]):
+        try:
+            df = fetch_finmind_cached("TaiwanStockPrice", did, start, end_date=as_of)
+        except FinMindRateLimitError:
+            continue
+        if df.empty:
+            continue
+        df = df.rename(columns={"max": "high", "min": "low"})
+        for c in ["open", "high", "low", "close"]:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+        keep = [c for c in ["date", "open", "high", "low", "close"] if c in df.columns]
+        return df[keep].sort_values("date").reset_index(drop=True)
+    return pd.DataFrame()
