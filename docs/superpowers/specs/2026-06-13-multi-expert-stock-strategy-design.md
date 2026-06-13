@@ -1,7 +1,7 @@
 ---
 title: 多角色股市策略系統（Multi-Expert Stock Strategy System）設計規格
 date: 2026-06-13
-status: 待使用者 review（含 2 項待拍板決策 D1/D2）
+status: 已定案（D1/D2 由 kevin 於 2026-06-13 拍板）— 進入實作計畫（writing-plans）
 author: kevin
 supersedes: V3.2 扁平 params 策略 + 單次 LLM 生成
 ---
@@ -151,10 +151,14 @@ supersedes: V3.2 扁平 params 策略 + 單次 LLM 生成
 
 ---
 
-## §5. 待你拍板的決策
+## §5. 待你拍板的決策（✅ 已定案）
 
-> 以下兩項是**主觀取捨**，審查官無法代決，需你拍板後本規格才定稿。
-> （技術正確性類的裁決——快取選 parquet+pyarrow、regime 唯一真相 `regime_classify`——已直接採納審查建議，列入 §4，不再詢問。）
+> 以下兩項是**主觀取捨**，審查官無法代決。**已於 2026-06-13 由 kevin 拍板定案如下**；
+> 原選項說明保留供追溯。（技術正確性類的裁決——快取選 parquet+pyarrow、regime 唯一真相 `regime_classify`——已直接採納審查建議，列入 §4。）
+
+> ✅ **定案結果（2026-06-13，kevin）**
+> - **D1 = 三段外層保留 + composite 決定技術內部**：`factors composite × 100 → tech_score`，外層仍三段加權，但權重由 `period` 決定（短線偏技術、長線偏基本面）；多策略投票僅用於「選哪檔策略評這檔股票」，不取代評分。**此即 §10 回測 CLI 與 §11 `evaluate_v2` 的唯一評分真相**，各 period 三段權重寫進 §9 `PERIOD_DEFAULTS`。
+> - **D2 = 接受近似 + 標註**：用 `TaiwanStockInfo` 上市/下市日反推存活清單（§10 `load_universe` 產凍結股池快照 commit 進 repo），回測 `meta.universe_note` 標 tag；接受殘留輕微 survivorship bias（回測績效略樂觀）。
 
 ### D1 — 評分模型（三選一）
 v2 怎麼把「因子合成分數」與現有「三段加權（基本面0.3/技術0.3/回測0.4）」整合？三章原本各自假設不同模型，會得到完全不同的 `signal_score` 與 BUY 門檻：
