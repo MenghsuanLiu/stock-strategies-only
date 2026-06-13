@@ -6,6 +6,7 @@ import requests
 import pandas as pd
 
 from .config import FINMIND_URL
+from .cache import fetch_finmind_cached
 
 
 def fetch_finmind(
@@ -52,22 +53,20 @@ def fetch_finmind(
 
 def get_price_history(stock_id: str, years: int = 3) -> pd.DataFrame:
     start = (datetime.now() - timedelta(days=365 * years + 60)).strftime("%Y-%m-%d")
-    df = fetch_finmind("TaiwanStockPrice", stock_id, start)
+    df = fetch_finmind_cached("TaiwanStockPrice", stock_id, start)
     if df.empty:
         return df
-    df["date"] = pd.to_datetime(df["date"])
-    df = df.sort_values("date").reset_index(drop=True)
     df = df.rename(columns={"max": "high", "min": "low", "Trading_Volume": "volume"})
     for col in ["open", "high", "low", "close", "volume"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
-    return df
+    return df.sort_values("date").reset_index(drop=True)
 
 
 def get_fundamental(stock_id: str) -> dict:
     """近 3 完整年度 EPS、ROE"""
     start = f"{datetime.now().year - 4}-01-01"
-    df = fetch_finmind("TaiwanStockFinancialStatements", stock_id, start)
+    df = fetch_finmind_cached("TaiwanStockFinancialStatements", stock_id, start)
     if df.empty:
         return {"eps": {}, "roe": {}}
 
