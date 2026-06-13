@@ -150,3 +150,58 @@ def get_shareholding(stock_id: str, start: str, as_of: str | None = None) -> pd.
     if as_of:
         df = df[df["date"] <= pd.to_datetime(as_of)]
     return df[["date", "foreign_ratio"]].sort_values("date").reset_index(drop=True)
+
+
+def get_stock_info(refresh: bool = False) -> pd.DataFrame:
+    """全市場靜態資料（一次抓、長快取）。回 stock_id, stock_name,
+       industry_category, market_type。"""
+    try:
+        df = fetch_finmind_cached(
+            "TaiwanStockInfo", "", "1990-01-01", fresh_days=7, force_refresh=refresh
+        )
+    except FinMindRateLimitError:
+        return pd.DataFrame()
+    if df.empty or not _require_cols(df, ["stock_id"]):
+        return pd.DataFrame()
+    df = df.rename(columns={"type": "market_type"})
+    keep = [c for c in ["stock_id", "stock_name", "industry_category", "market_type"] if c in df.columns]
+    return df[keep].drop_duplicates(subset=["stock_id"]).reset_index(drop=True)
+
+
+_COMMON_STOCK_TYPES = {
+    "CommonStocksAndOrdinaryShares", "OrdinaryShare", "CommonStock", "CommonStocks",
+}
+
+
+def get_capital_and_industry(stock_id: str, as_of: str | None = None) -> dict:
+    """回 {industry, shares_outstanding(元), market_cap(元 at as_of)}；缺則 None。
+    市值 = 股本/10 × 收盤（面額10元 → 股數=股本/10）。"""
+    out = {"industry": None, "shares_outstanding": None, "market_cap": None}
+    info = get_stock_info()
+    if not info.empty and stock_id in set(info["stock_id"]):
+        row = info.set_index("stock_id").loc[stock_id]
+        out["industry"] = row.get("industry_category")
+    # 股本（普通股）
+    try:
+        fin = fetch_finmind_cached(
+            "TaiwanStockFinancialStatements", stock_id, "2015-01-01", end_date=as_of
+        )
+    except FinMindRateLimitError:
+        fin = pd.DataFrame()
+    shares = None
+    if not fin.empty and _require_cols(fin, ["type", "value"]):
+        cap = fin[fin["type"].isin(_COMMON_STOCK_TYPES)]
+        if not cap.empty:
+            shares = float(pd.to_numeric(cap.sort_values("date")["value"], errors="coerce").dropna().iloc[-1])
+    out["shares_outstanding"] = shares
+    # 市值
+    if shares:
+        try:
+            px = fetch_finmind_cached("TaiwanStockPrice", stock_id, "2015-01-01", end_date=as_of)
+        except FinMindRateLimitError:
+            px = pd.DataFrame()
+        if not px.empty and "close" in px.columns:
+            close = pd.to_numeric(px.sort_values("date")["close"], errors="coerce").dropna()
+            if len(close):
+                out["market_cap"] = shares / 10 * float(close.iloc[-1])
+    return out
